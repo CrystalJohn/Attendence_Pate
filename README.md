@@ -1,21 +1,21 @@
-# NEST
+# NEST · NTC PATE
 
-NEST là workspace prototype cho app điểm danh và kết nối nhóm sinh viên Tin Lành.
+NEST là không gian quản lý và tương tác nội bộ cho nhóm sinh viên `NTC PATE`.
 
 > Kết nối thật, lớn lên cùng nhau.
 
-## Đã có trong bản này
+## Trạng thái hiện tại
 
-- Dashboard phòng sinh hoạt với QR thật từ `qrcode.react`.
-- Check-in route `/check-in/:token`, chọn tên, linh vật và tâm trạng.
-- Chặn duplicate check-in trong cùng session ở state demo.
-- Số liệu tự đổi theo số người đã check-in, ví dụ `6/30` và `24 chưa đến`.
-- Khu rừng thành viên, hoạt động nhanh, chat công khai và ẩn danh.
-- Leader/Admin moderation cơ bản và luồng hỏi thăm người vắng.
-- Leader pages: `/leader/members`, `/leader/sessions`, `/leader/follow-ups`.
-- Role switcher để kiểm tra nhanh quyền Member/Leader/Admin.
-- Dark mode, responsive layout và reduced-motion fallback.
-- `supabase/schema.sql` với enum, unique constraint `session_id + profile_id`, Realtime-ready tables và RLS policy.
+Đây là bản nâng cấp của codebase Vite hiện có. UI chạy ngay bằng local demo state để có thể review flow khi chưa có Supabase credentials. Lớp Supabase, RLS và Edge Functions đã được dựng theo contract bảo mật, nhưng chưa được xem là production-ready cho đến khi project Supabase thật được migrate, cấu hình Auth, bật Realtime và chạy integration tests.
+
+Các surface chính:
+
+- `/room/today`: dashboard phòng, QR check-in, khu rừng hiện diện, chat và pulse.
+- `/check-in/:token`: guest check-in với tìm kiếm tên, nhập tên mới ở trạng thái pending, duplicate và closed-session states.
+- `/session/:sessionId`: trang buổi nhóm công khai. Draft hiển thị đúng empty state và không lộ nội dung nội bộ.
+- `/room/activities`: Word Cloud, Poll, Open-ended, Quiz và Reaction Board.
+- `/present/:sessionId`: màn hình trình chiếu lớn cho TV hoặc projector, chỉ hiển thị dữ liệu công khai.
+- `/management/members`, `/management/sessions`, `/management/follow-ups`: khu vực Management; Guest bị chặn ở UI và phải tiếp tục được bảo vệ bởi RLS.
 
 ## Chạy local
 
@@ -26,50 +26,65 @@ npm run dev
 
 Mở [http://127.0.0.1:5173/room/today](http://127.0.0.1:5173/room/today).
 
-Build production:
-
 ```bash
+npm run lint
+npm test
 npm run build
 npm run preview
 ```
 
-## Supabase
+Role switcher trên topbar chỉ là công cụ review local. Nó không thay thế Supabase Auth.
 
-1. Tạo project Supabase.
-2. Copy `.env.example` thành `.env.local` và điền `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
-3. Chạy `supabase/schema.sql` trong SQL Editor hoặc qua Supabase CLI.
-4. Cấu hình Auth bằng magic link hoặc Google OAuth.
-5. Tạo seed profiles/group/session/attendance trong migration seed riêng. Không dùng service key trong browser.
-6. Bật Realtime cho `attendance`, `activities`, `messages` và subscribe theo `session_id`.
+## Cấu hình Supabase
 
-Token QR phải là token ngẫu nhiên theo từng session. Chỉ lưu hash trong database, validate ở server/Edge Function, kiểm tra `status = 'open'` và thời hạn trước khi insert attendance.
+1. Tạo project Supabase và copy `.env.example` thành `.env.local`.
+2. Điền `VITE_SUPABASE_URL` và `VITE_SUPABASE_PUBLISHABLE_KEY`. Alias `VITE_SUPABASE_ANON_KEY` vẫn được đọc để hỗ trợ project cũ.
+3. Chạy migration `supabase/migrations/20260917000000_ntc_pate.sql` bằng Supabase CLI, hoặc chạy `supabase/schema.sql` trong SQL Editor, sau đó chạy `supabase/seed.sql`.
+4. Tạo Auth user cho Ban điều hành, tạo row `profiles`, rồi thêm row tương ứng vào `group_management`.
+5. Deploy bốn Edge Functions trong `supabase/functions/` (`guest-checkin`, `guest-session`, `guest-activity`, `guest-message`) và đặt `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` ở server-side secrets. Không đưa service role key vào Vite client.
+6. Bật Realtime cho các bảng an toàn: `sessions`, `attendance`, `activities`, `messages`, `reactions`. Client helper nằm ở `src/lib/realtime.ts`.
 
-## Kiến trúc ngắn gọn
+### Vì sao nội dung nội bộ được tách bảng
 
-- `src/App.tsx`: app shell, local demo state, route switching và các screen/component.
-- `src/styles.css`: token CSS, responsive layout, dark mode, focus state, reduced motion.
-- `supabase/schema.sql`: data model + helper functions + RLS.
-- UI dùng localStorage để demo không cần credential. Khi nối Supabase, thay `usePersistedState` bằng data hooks và giữ nguyên contract của các component.
+RLS bảo vệ theo row, không ẩn được một cột riêng trong một row đã cấp quyền đọc. Vì vậy `sessions` chỉ chứa public fields; kế hoạch nội bộ ở `session_internal_plans`, ghi chú assignment ở `session_assignment_internal`, còn dữ liệu vắng, contact info và follow-up chỉ nằm trong các bảng Management-only. Guest đọc và ghi qua Edge Function gateway có token ngắn hạn.
 
-## Seed demo
+### Các nguyên tắc dữ liệu
 
-State demo tạo một nhóm 30 người, session hôm nay lúc 19:15, 6 người đã đến, 2 tin nhắn mẫu và các hoạt động gần nhất. Trạng thái mới được lưu dưới key `nest-demo-state-v1` trong localStorage. Xóa key này để reset seed.
+- Chỉ dùng hai quyền nghiệp vụ: `MANAGEMENT` và `GUEST`.
+- Session có lifecycle `draft`, `published`, `live`, `closed`.
+- QR/access token chỉ lưu hash trong database.
+- `attendance` có unique constraint theo `(session_id, member_id)` để duplicate check-in là trạng thái có chủ đích.
+- Tên tự nhập tạo `members.status = 'pending'`, không tự động trở thành Management.
+- Guest không được đọc contact info, private note, attendance absence list, follow-up hay moderation log.
 
-## Kiểm tra nhanh
+## Cấu trúc chính
 
-- [x] `npm run build` pass.
-- [x] QR render thật và mở route check-in.
-- [x] Submit check-in mới hiển thị success.
-- [x] Submit lại cùng member hiển thị duplicate.
-- [x] Count chuyển từ 6/30 sang 7/30 và 23 chưa đến.
-- [x] Chat public/anonymous append message vào state.
-- [x] Leader moderation ẩn message khỏi phòng.
-- [x] Member không thấy khu vực Hỏi thăm hoặc danh sách người vắng.
-- [x] Dark mode đổi token surface/text.
-- [x] `npm test` pass với duplicate check-in, session đóng/inactive và role authorization.
-- [ ] Supabase Auth/Realtime/RLS live, email và Messenger/Zalo provider cần cấu hình project.
-- [ ] Integration test với Supabase cần bổ sung khi data hooks/backend được nối thật.
+- `src/App.tsx`: shell, router, UI states và local fallback.
+- `src/domain/checkinRules.ts`: quyết định check-in và role privacy.
+- `src/domain/checkinSchema.ts`: schema validation bằng Zod.
+- `src/lib/supabase.ts`: client boundary với session persistence và auto refresh.
+- `src/lib/realtime.ts`: subscription helper theo session.
+- `src/styles.css`: token CSS, light/dark, responsive và reduced-motion.
+- `supabase/schema.sql`: schema, internal/public split, helper functions và RLS.
+- `supabase/migrations/20260917000000_ntc_pate.sql`: migration canonical cho Supabase CLI.
+- `supabase/seed.sql`: NTC PATE demo data, không chứa mật khẩu hoặc secret.
+- `supabase/functions/guest-checkin`: validate token, session window, pending member và idempotent attendance.
+- `supabase/functions/guest-session`: trả public session và public assignments theo guest token.
+- `supabase/functions/guest-activity`: trả activity definitions/options an toàn theo guest token, không trả responses thô.
+- `supabase/functions/guest-message`: gửi chat công khai hoặc ẩn danh theo guest session, với moderation status mặc định visible.
+- `vercel.json`: rewrite để deep link của Vite SPA hoạt động trên Vercel.
 
 ## Deploy Vercel
 
-Import repository vào Vercel, chọn framework Vite, build command `npm run build`, output directory `dist`, sau đó thêm biến môi trường từ `.env.local`. Nếu dùng Supabase, chỉ đưa URL và anon key vào client; mọi thao tác privileged dùng server route/Edge Function.
+Import project vào Vercel, chọn Vite, build command `npm run build`, output directory `dist`, rồi thêm các biến môi trường public từ `.env.local`. Deep links được rewrite về `index.html` bằng `vercel.json`.
+
+## Checklist bàn giao
+
+- [x] React Router deep links và Vercel SPA rewrite.
+- [x] Guest/Management surfaces, management guard và public/private UI separation.
+- [x] Searchable guest check-in, pending member flow, duplicate và closed states.
+- [x] Activity hub và presentation route với public-only data.
+- [x] Supabase schema/RLS split, client boundary, Realtime helper và Edge Function contracts.
+- [x] Local fallback được ghi rõ, không giả vờ là backend live.
+- [ ] Supabase project thật, Auth provider, Realtime publication và production rate limiting.
+- [ ] Integration/E2E tests chạy với project Supabase staging.
